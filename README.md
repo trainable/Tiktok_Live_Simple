@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # TikTok 简化直播间 Android 应用
 
 一个高性能的 Android 直播应用，采用 MVVM 架构，支持 DASH 直播流播放、实时评论、在线人数统计等功能。通过多种性能优化技术，实现了流畅的直播观看体验。
@@ -429,3 +430,6 @@ ConstraintLayout (根布局)
 
 ---
 
+=======
+# Tiktok_Live_Simple
+>>>>>>> f0a8e786a7a92efcb04fa96b0cd3996d9634e80d
