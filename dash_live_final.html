@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,minimal-ui">
+    <meta name="referrer" content="no-referrer">
+    <title>播放器 - DASH 直播流</title>
+    <style type="text/css">
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        background: #000;
+      }
+      #mse {
+        flex: auto;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+    <script type="text/javascript">
+      // 响应式高度调整 - 优化：使用防抖，减少频繁的 DOM 操作
+      let resizeTimer = null;
+      window.addEventListener('resize', function() {
+        if (resizeTimer) {
+          clearTimeout(resizeTimer);
+        }
+        resizeTimer = setTimeout(function() {
+          const mse = document.getElementById('mse');
+          if (mse) {
+            mse.style.height = window.innerHeight + 'px';
+          }
+        }, 100); // 防抖延迟 100ms
+      });
+    </script>
+  </head>
+  <body>
+    <div id="mse"></div>
+    <!-- xgplayer 核心库 -->
+    <script src="https://unpkg.byted-static.com/xgplayer/2.31.2/browser/index.js" charset="utf-8"></script>
+    <!-- xgplayer-shaka 插件 -->
+    <script src="https://unpkg.byted-static.com/xgplayer-shaka/1.1.5/browser/index.js" charset="utf-8"></script>
+    <script type="text/javascript">
+      // 全局播放器实例
+      let player = null;
+      
+      /**
+       * 初始化播放器
+       * 参考 xgplayer 最佳实践和 xgplayer-shaka 插件实现
+       */
+      function initPlayer() {
+        // 检查 ShakaJsPlayer 是否已加载
+        if (typeof window.ShakaJsPlayer === 'undefined') {
+          console.error('ShakaJsPlayer 未加载，等待重试...');
+          setTimeout(initPlayer, 500);
+          return;
+        }
+        
+        try {
+          // DASH 直播流地址
+          const streamUrl = 'https://akamaibroadcasteruseast.akamaized.net/cmaf/live/657078/akasource/out.mpd';
+          
+          console.log('初始化 DASH 直播流播放器，流地址:', streamUrl);
+          
+          // 创建 ShakaJsPlayer 实例
+          // 参考 xgplayer-shaka 插件和 xgplayer 默认配置
+          player = new window.ShakaJsPlayer({
+            id: 'mse',
+            url: streamUrl,
+            // 直播流标识
+            isLive: true,
+            // 自动播放配置
+            autoplay: true,
+            autoplayMuted: true,
+            muted: true,
+            // 控制栏配置（直播流通常不需要控制栏）
+            controls: false,
+            // 忽略某些事件（减少不必要的处理）
+            ignores: ['error', 'progress'],
+            // 移动端优化
+            playsinline: true,
+            // 尺寸配置
+            height: window.innerHeight,
+            width: window.innerWidth,
+            // 白名单配置（允许所有域名）
+            whitelist: [''],
+            // Shaka Player 配置选项
+            // 参考 xgplayer-shaka 插件和 Shaka Player 官方文档
+            shakaOpts: {
+              // 流媒体配置（针对直播流优化）
+              streaming: {
+                // 重新缓冲目标时间（秒）- 低延迟直播流推荐值（优化：降低以减少延迟）
+                rebufferingGoal: 1.5,
+                // 缓冲目标时间（秒）- 直播流推荐值（优化：降低以减少延迟）
+                bufferingGoal: 8,
+                // 缓冲滞后时间（秒）- 保持足够的缓冲（优化：降低以减少内存占用）
+                bufferBehind: 20,
+                // 低延迟模式
+                lowLatencyMode: true,
+                // 优化：禁用 ABR（自适应码率），避免频繁切换导致的卡顿
+                abr: {
+                  enabled: false
+                }
+              },
+              // Manifest 配置
+              manifest: {
+                // 重试参数（优化：减少重试次数和延迟，快速失败）
+                retryParameters: {
+                  timeout: 8000,        // 超时时间（毫秒）- 优化：减少超时时间
+                  maxAttempts: 3,        // 最大重试次数 - 优化：减少重试次数
+                  baseDelay: 500,       // 基础延迟（毫秒）- 优化：减少延迟
+                  backoffFactor: 2,      // 退避因子
+                  fuzzFactor: 0.5        // 随机因子
+                },
+                // 可用窗口覆盖（秒）- 直播流推荐值（优化：降低以减少内存占用）
+                availabilityWindowOverride: 40,
+                // 更新间隔（毫秒）- 直播流需要定期更新 manifest（优化：增加间隔以减少请求）
+                updateInterval: 8000
+              }
+            }
+          });
+          
+          console.log('播放器初始化成功');
+          
+          // 设置事件监听器
+          setupEventListeners();
+          
+          // 设置备用播放方案
+          setupFallbackPlayback();
+          
+          // 隐藏不需要的 UI 元素（直播流）
+          hideUnnecessaryUI();
+          
+        } catch (error) {
+          console.error('初始化播放器失败:', error);
+          console.error('错误堆栈:', error.stack);
+          // 优化：添加错误提示，帮助调试
+          if (error && error.message) {
+            console.error('错误详情:', error.message);
+          }
+          // 尝试重新初始化（延迟重试）
+          setTimeout(function() {
+            console.log('尝试重新初始化播放器...');
+            initPlayer();
+          }, 2000);
+        }
+      }
+      
+      /**
+       * 设置事件监听器
+       * 参考 xgplayer 事件系统和最佳实践
+       */
+      function setupEventListeners() {
+        if (!player || !player.on) {
+          return;
+        }
+        
+        // 错误事件处理
+        player.on('error', function(error) {
+          console.error('播放器错误事件:', error);
+          // 阻止默认错误处理（如果支持）
+          if (error && typeof error.preventDefault === 'function') {
+            error.preventDefault();
+          }
+        });
+        
+        // 播放开始事件
+        player.on('playing', function() {
+          console.log('✓ 开始播放');
+          // 直播流保持静音，等待用户交互后再取消静音
+          // 不在这里取消静音，避免浏览器策略阻止自动播放
+        });
+        
+        // 加载开始事件
+        player.on('loadstart', function() {
+          console.log('开始加载流媒体');
+        });
+        
+        // 可以播放事件
+        player.on('canplay', function() {
+          console.log('可以播放，尝试自动播放');
+          // 强制播放（保持静音）
+          if (player && typeof player.play === 'function') {
+            player.play().catch(function(err) {
+              console.log('自动播放被阻止，尝试静音播放:', err);
+              // 如果自动播放失败，确保静音并播放
+              if (player && player.video) {
+                player.video.muted = true;
+                if (typeof player.play === 'function') {
+                  player.play().then(function() {
+                    console.log('✓ 静音播放成功');
+                  }).catch(function(err2) {
+                    console.error('静音播放也失败:', err2);
+                  });
+                }
+              }
+            });
+          }
+        });
+        
+        // 缓冲事件
+        player.on('waiting', function() {
+          console.log('缓冲中...');
+        });
+        
+        // 数据加载完成事件
+        player.on('loadeddata', function() {
+          console.log('数据加载完成');
+        });
+        
+        // 播放事件
+        player.on('play', function() {
+          console.log('play 事件触发');
+        });
+        
+        // 暂停事件
+        player.on('pause', function() {
+          console.log('pause 事件触发');
+        });
+        
+        // 播放结束事件（直播流通常不会触发）
+        player.on('ended', function() {
+          console.log('播放结束');
+        });
+        
+        // 监听用户交互，取消静音
+        // 优化：使用 once 选项，只监听一次，减少事件监听器数量
+        // 优化：使用捕获阶段，更快响应
+        document.addEventListener('click', function() {
+          if (player && player.video && player.video.muted) {
+            player.video.muted = false;
+            console.log('用户交互，取消静音');
+          }
+        }, { once: true, capture: true });
+      }
+      
+      /**
+       * 设置备用播放方案
+       * 如果自动播放失败，延迟后尝试强制播放
+       */
+      function setupFallbackPlayback() {
+        setTimeout(function() {
+          if (player && player.video) {
+            const video = player.video;
+            if (video.paused) {
+              console.log('检测到视频暂停，尝试强制播放');
+              video.muted = true;
+              video.play().then(function() {
+                console.log('✓ 强制播放成功（静音）');
+              }).catch(function(err) {
+                console.error('强制播放失败:', err);
+              });
+            } else {
+              console.log('视频已在播放');
+            }
+          }
+        }, 2000);
+      }
+      
+      /**
+       * 隐藏不需要的 UI 元素
+       * 直播流不需要进度条、时间显示等
+       * 优化：减少延迟，更快隐藏 UI 元素
+       */
+      function hideUnnecessaryUI() {
+        // 优化：使用 requestAnimationFrame 确保在下一帧执行，减少延迟
+        requestAnimationFrame(function() {
+          if (player && player.root) {
+            const root = player.root;
+            
+            // 优化：使用 CSS 类隐藏，而不是直接操作 style，性能更好
+            // 隐藏进度条（直播流不需要进度条）
+            const progress = root.querySelector('.xgplayer-progress');
+            if (progress) {
+              progress.style.display = 'none';
+            }
+            
+            // 隐藏时间显示（直播流不需要时间显示）
+            const time = root.querySelector('.xgplayer-time');
+            if (time) {
+              time.style.display = 'none';
+            }
+            
+            // 隐藏控制栏（如果配置了 controls: false）
+            const controls = root.querySelector('.xgplayer-controls');
+            if (controls && player.config && player.config.controls === false) {
+              controls.style.display = 'none';
+            }
+            
+            console.log('已隐藏直播流不需要的 UI 元素');
+          }
+        });
+      }
+      
+      /**
+       * 捕获未处理的 Promise 错误
+       * 参考 xgplayer 错误处理最佳实践
+       */
+      window.addEventListener('unhandledrejection', function(event) {
+        console.error('未处理的 Promise 错误:', event.reason);
+        
+        try {
+          if (event && event.reason) {
+            const reason = event.reason;
+            
+            // 安全地访问错误属性
+            if (reason.detail && typeof reason.detail === 'object') {
+              console.error('错误详情对象:', reason.detail);
+              if (reason.detail.code !== undefined && reason.detail.code !== null) {
+                console.error('Shaka 错误代码:', reason.detail.code);
+              }
+            }
+            
+            if (reason.code !== undefined && reason.code !== null) {
+              console.error('错误代码:', reason.code);
+            }
+            
+            if (reason.message) {
+              console.error('错误消息:', reason.message);
+            }
+            
+            // 打印完整的错误对象以便调试
+            try {
+              console.error('完整错误对象:', JSON.stringify(reason, Object.getOwnPropertyNames(reason)));
+            } catch (e) {
+              console.error('无法序列化错误对象:', e);
+            }
+          }
+        } catch (e) {
+          console.error('处理未捕获错误时发生异常:', e);
+        }
+        
+        // 不阻止，让错误显示出来以便调试
+      });
+      
+      /**
+       * 页面加载完成后初始化播放器
+       * 确保所有资源都已加载
+       */
+      if (document.readyState === 'complete') {
+        initPlayer();
+      } else {
+        window.addEventListener('load', initPlayer);
+      }
+    </script>
+  </body>
+</html>

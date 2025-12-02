@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,minimal-ui">
+    <meta name="referrer" content="no-referrer">
+    <title>播放器 - DASH 直播流</title>
+    <style type="text/css">
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        background: #000;
+      }
+      #mse {
+        flex: auto;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+    <script type="text/javascript">
+      // 响应式高度调整 - 优化：使用防抖，减少频繁的 DOM 操作
+      let resizeTimer = null;
+      window.addEventListener('resize', function() {
+        if (resizeTimer) {
+          clearTimeout(resizeTimer);
+        }
+        resizeTimer = setTimeout(function() {
+          const mse = document.getElementById('mse');
+          if (mse) {
+            mse.style.height = window.innerHeight + 'px';
+          }
+        }, 100); // 防抖延迟 100ms
+      });
+    </script>
+  </head>
+  <body>
+    <div id="mse"></div>
+    <!-- xgplayer 核心库（本地文件，无需网络） -->
+    <script src="file:///android_asset/xgplayer.js" charset="utf-8"></script>
+    <!-- xgplayer-shaka 插件（本地文件，无需网络） -->
+    <script src="file:///android_asset/xgplayer-shaka.js" charset="utf-8"></script>
+    <script type="text/javascript">
+      // 全局播放器实例
+      let player = null;
+      
+      // 性能监控时间点（单位：毫秒）
+      let perfMetrics = {
+        playerInitTime: 0,      // 播放器初始化时间
+        loadStartTime: 0,       // 开始加载时间（连接建立）
+        loadedDataTime: 0,      // 首帧数据加载完成时间
+        playingTime: 0,         // 首帧渲染时间（开始播放）
+        firstFrameDuration: 0  // 首帧渲染总耗时（从初始化到首帧渲染）
+      };
+      
+      // 记录时间点
+      function recordTime(key) {
+        const now = Date.now();
+        perfMetrics[key] = now;
+        
+        // 计算首帧渲染总耗时
+        if (perfMetrics.playingTime > 0 && perfMetrics.firstFrameDuration === 0 && perfMetrics.playerInitTime > 0) {
+          perfMetrics.firstFrameDuration = perfMetrics.playingTime - perfMetrics.playerInitTime;
+          // 通过 Android 接口回调性能指标
+          try {
+            if (window.Android && typeof window.Android.onVideoPerformanceMetrics === 'function') {
+              window.Android.onVideoPerformanceMetrics(JSON.stringify(perfMetrics));
+            } else {
+              // 调试：如果接口不可用，输出到控制台
+              console.log('性能指标:', perfMetrics);
+            }
+          } catch (e) {
+            console.error('回调性能指标失败:', e);
+          }
+        }
+      }
+      
+      /**
+       * 获取流地址，支持 URL 参数传递
+       */
+      function getStreamUrl() {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get('url') || 'https://akamaibroadcasteruseast.akamaized.net/cmaf/live/657078/akasource/out.mpd';
+      }
+      
+      /**
+       * 检查是否是预加载模式（只缓冲，不播放）
+       */
+      function isPreloadMode() {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get('preload') === 'true';
+      }
+      
+      /**
+       * 初始化播放器
+       * 参考 xgplayer 最佳实践和 xgplayer-shaka 插件实现
+       */
+      function initPlayer() {
+        // 检查 ShakaJsPlayer 是否已加载
+        if (typeof window.ShakaJsPlayer === 'undefined') {
+          // 增加重试次数限制，避免无限重试
+          if (!initPlayer.retryCount) {
+            initPlayer.retryCount = 0;
+          }
+          initPlayer.retryCount++;
+          if (initPlayer.retryCount > 20) {
+            console.error('ShakaJsPlayer 加载失败，已重试 20 次');
+            return;
+          }
+          setTimeout(initPlayer, 500);
+          return;
+        }
+        
+        try {
+          // 记录播放器初始化开始时间（立即记录）
+          const initStartTime = Date.now();
+          perfMetrics.playerInitTime = initStartTime;
+          
+          // DASH 直播流地址（支持 URL 参数）
+          const streamUrl = getStreamUrl();
+          const preloadMode = isPreloadMode();
+          
+          // 创建 ShakaJsPlayer 实例
+          // 参考 xgplayer-shaka 插件和 xgplayer 默认配置
+          player = new window.ShakaJsPlayer({
+            id: 'mse',
+            url: streamUrl,
+            // 直播流标识
+            isLive: true,
+            // 自动播放配置（预加载模式也自动播放，确保开始下载数据）
+            autoplay: true,  // 预加载模式也需要自动播放，确保开始下载数据
+            autoplayMuted: preloadMode,  // 预加载模式静音播放
+            // 非预加载模式：默认不静音，让用户能听到声音
+            // 预加载模式：保持静音，但进入直播间后会自动取消静音
+            muted: preloadMode,
+            // 控制栏配置（直播流通常不需要控制栏）
+            controls: false,
+            // 忽略某些事件（减少不必要的处理）
+            ignores: ['error', 'progress'],
+            // 移动端优化
+            playsinline: true,
+            // 尺寸配置
+            height: window.innerHeight,
+            width: window.innerWidth,
+            // 白名单配置（允许所有域名）
+            whitelist: [''],
+            // 重要：确保点击功能启用（xgplayer 默认启用，但明确设置更安全）
+            // closeVideoClick: false, // 不关闭视频点击功能（默认就是 false）
+            // 移动端点击配置（确保移动端也能点击暂停/播放）
+            mobile: {
+              focusVideoClick: true, // 点击视频时获得焦点并切换播放/暂停
+              closedbClick: false     // 不关闭双击功能
+            },
+            // Shaka Player 配置选项
+            // 参考 xgplayer-shaka 插件和 Shaka Player 官方文档
+            shakaOpts: {
+              // 流媒体配置（针对直播流优化 - 参考dash_live_final.html的流畅配置）
+              streaming: {
+                // 重新缓冲目标时间（秒）- 低延迟直播流推荐值（参考dash_live_final.html）
+                rebufferingGoal: 1.5,
+                // 缓冲目标时间（秒）- 直播流推荐值（参考dash_live_final.html）
+                bufferingGoal: 8,
+                // 缓冲滞后时间（秒）- 保持足够的缓冲（参考dash_live_final.html）
+                bufferBehind: 20,
+                // 低延迟模式
+                lowLatencyMode: true,
+                // 优化：禁用 ABR（自适应码率），避免频繁切换导致的卡顿
+                abr: {
+                  enabled: false
+                }
+              },
+              // Manifest 配置
+              manifest: {
+                // 重试参数（参考dash_live_final.html的配置）
+                retryParameters: {
+                  timeout: 8000,        // 超时时间（毫秒）
+                  maxAttempts: 3,        // 最大重试次数
+                  baseDelay: 500,       // 基础延迟（毫秒）
+                  backoffFactor: 2,      // 退避因子
+                  fuzzFactor: 0.5        // 随机因子
+                },
+                // 可用窗口覆盖（秒）- 直播流推荐值
+                availabilityWindowOverride: 40,
+                // 更新间隔（毫秒）- 直播流需要定期更新 manifest
+                updateInterval: 8000
+              }
+            }
+          });
+          
+          // 保存全局引用，方便外部访问
+          window.player = player;
+          
+          // 设置事件监听器
+          setupEventListeners();
+          
+          // 预加载模式：后台持续播放直到数据加载完成，然后暂停，进入直播间时自动恢复播放
+          if (preloadMode) {
+            // 预加载模式下，autoplay 已设置为 true，播放器应该自动开始播放
+            // 但为了确保，我们仍然手动触发播放
+            console.log('✓ 预加载模式：播放器初始化完成，等待自动播放或手动触发播放');
+            
+            // 立即检查播放器状态，如果 autoplay 没有生效，手动触发
+            setTimeout(function() {
+              try {
+                if (player && player.video) {
+                  var video = player.video;
+                  var readyState = video.readyState;
+                  var paused = video.paused;
+                  console.log('预加载模式：初始状态 readyState=' + readyState + ', paused=' + paused);
+                  
+                  // 预加载模式下，静音播放（避免后台有声音）
+                  video.muted = true;
+                  
+                  // 如果还没开始播放，手动触发播放
+                  if (paused) {
+                    console.log('预加载模式：播放器未自动播放，手动触发播放');
+                    var playPromise = video.play();
+                    if (playPromise !== undefined) {
+                      playPromise.then(function() {
+                        console.log('✓ 预加载模式：手动播放成功，开始下载数据');
+                        startPreloadCheck();
+                      }).catch(function(err) {
+                        console.error('预加载模式手动播放失败:', err);
+                        // 重试
+                        setTimeout(function() {
+                          if (player && player.video) {
+                            player.video.muted = true;
+                            player.video.play().then(function() {
+                              console.log('✓ 预加载模式：重试播放成功');
+                              startPreloadCheck();
+                            }).catch(function(e) {
+                              console.error('预加载模式重试失败:', e);
+                            });
+                          }
+                        }, 2000);
+                      });
+                    }
+                  } else {
+                    console.log('✓ 预加载模式：播放器已自动播放，开始检查数据加载');
+                    startPreloadCheck();
+                  }
+                  
+                  // 开始检查数据加载状态
+                  function startPreloadCheck() {
+                    function checkAndPause() {
+                      try {
+                        if (player && player.video) {
+                          var readyState = player.video.readyState;
+                          var paused = player.video.paused;
+                          if (readyState >= 3) {
+                            // 数据已加载完成，暂停播放
+                            if (!paused) {
+                              player.video.pause();
+                            }
+                            console.log('✓ 预加载模式：数据已加载完成（readyState=' + readyState + '），暂停播放（等待进入直播间）');
+                            // 标记已暂停，等待恢复播放
+                            window.preloadPaused = true;
+                            window.preloadReady = true; // 标记数据已准备好
+                          } else {
+                            // 数据还没加载完成，继续等待
+                            console.log('预加载模式：数据加载中，readyState=' + readyState + '，继续等待...');
+                            setTimeout(checkAndPause, 500); // 每 500ms 检查一次
+                          }
+                        }
+                      } catch (err) {
+                        console.error('检查数据加载状态失败:', err);
+                      }
+                    }
+                    // 延迟 1 秒后开始检查
+                    setTimeout(checkAndPause, 1000);
+                  }
+                } else {
+                  console.error('预加载模式：播放器或视频元素不存在');
+                }
+              } catch (e) {
+                console.error('预加载模式启动异常:', e);
+              }
+            }, 1500); // 延迟 1.5 秒，确保播放器已完全初始化
+          } else {
+            // 设置备用播放方案（非预加载模式）
+            setupFallbackPlayback();
+          }
+          
+          // 隐藏不需要的 UI 元素（直播流）
+          hideUnnecessaryUI();
+          
+        } catch (error) {
+          // 静默处理初始化错误，避免频繁日志输出影响性能
+          // 尝试重新初始化（延迟重试）
+          setTimeout(function() {
+            initPlayer();
+          }, 2000);
+        }
+      }
+      
+      /**
+       * 设置事件监听器
+       * 参考 xgplayer 事件系统和最佳实践
+       */
+      function setupEventListeners() {
+        if (!player || !player.on) {
+          return;
+        }
+        
+        // 错误事件处理
+        player.on('error', function(error) {
+          // 静默处理错误，避免频繁日志输出影响性能
+          // 阻止默认错误处理（如果支持）
+          if (error && typeof error.preventDefault === 'function') {
+            error.preventDefault();
+          }
+        });
+        
+          // 播放开始事件
+        player.on('playing', function() {
+          // 记录首帧渲染时间（开始播放）
+          recordTime('playingTime');
+        });
+        
+        // 加载开始事件
+        player.on('loadstart', function() {
+          // 记录开始加载时间（连接建立）
+          recordTime('loadStartTime');
+          if (isPreloadMode()) {
+            console.log('✓ 预加载模式：开始加载数据（后台缓冲）');
+          }
+        });
+        
+        // 可以播放事件
+        player.on('canplay', function() {
+          // 预加载模式不自动播放，但允许外部调用 play() 强制播放
+          if (isPreloadMode()) {
+            console.log('✓ 预加载模式：数据已缓冲完成，等待外部启动播放');
+            // 检查是否有外部强制播放的标记
+            if (window.forcePlayAfterPreload) {
+              window.forcePlayAfterPreload = false;
+              if (player && typeof player.play === 'function') {
+                player.video.muted = true;
+                player.play().catch(function(err) {
+                  console.error('预加载模式播放失败:', err);
+                });
+              }
+            }
+            return;
+          }
+          // 强制播放（保持静音）
+          if (player && typeof player.play === 'function') {
+            player.play().catch(function(err) {
+              // 如果自动播放失败，确保静音并播放
+              if (player && player.video) {
+                player.video.muted = true;
+                if (typeof player.play === 'function') {
+                  player.play().catch(function(err2) {
+                    // 静默处理
+                  });
+                }
+              }
+            });
+          }
+        });
+        
+        // 缓冲事件
+        player.on('waiting', function() {
+          // 缓冲中
+        });
+        
+        // 数据加载完成事件
+        player.on('loadeddata', function() {
+          // 记录首帧数据加载完成时间
+          recordTime('loadedDataTime');
+          if (isPreloadMode()) {
+            console.log('✓ 预加载模式：首帧数据已加载完成');
+          }
+        });
+        
+        // 播放事件
+        player.on('play', function() {
+          // play 事件触发
+        });
+        
+        // 暂停事件
+        player.on('pause', function() {
+          // pause 事件触发
+        });
+        
+        // 播放结束事件（直播流通常不会触发）
+        player.on('ended', function() {
+          // 播放结束
+        });
+        
+        // 监听用户交互，取消静音
+        // 优化：使用捕获阶段，更快响应
+        // 注意：不使用 once，允许多次点击取消静音
+        document.addEventListener('click', function() {
+          if (player && player.video && player.video.muted) {
+            player.video.muted = false;
+            console.log('✓ 用户交互，取消静音');
+          }
+        }, { capture: true });
+        
+        // 监听视频元素点击，也取消静音
+        if (player && player.video) {
+          player.video.addEventListener('click', function() {
+            if (player && player.video && player.video.muted) {
+              player.video.muted = false;
+              console.log('✓ 视频点击，取消静音');
+            }
+          });
+        }
+      }
+      
+      /**
+       * 设置备用播放方案
+       * 如果自动播放失败，延迟后尝试强制播放
+       */
+      function setupFallbackPlayback() {
+        setTimeout(function() {
+          if (player && player.video) {
+            const video = player.video;
+            if (video.paused) {
+              video.muted = true;
+              video.play().catch(function(err) {
+                // 静默处理
+              });
+            }
+          }
+        }, 2000);
+      }
+      
+      /**
+       * 隐藏不需要的 UI 元素
+       * 直播流不需要进度条、时间显示等
+       * 优化：减少延迟，更快隐藏 UI 元素
+       */
+      function hideUnnecessaryUI() {
+        // 优化：使用 requestAnimationFrame 确保在下一帧执行，减少延迟
+        requestAnimationFrame(function() {
+          if (player && player.root) {
+            const root = player.root;
+            
+            // 优化：使用 CSS 类隐藏，而不是直接操作 style，性能更好
+            // 隐藏进度条（直播流不需要进度条）
+            const progress = root.querySelector('.xgplayer-progress');
+            if (progress) {
+              progress.style.display = 'none';
+            }
+            
+            // 隐藏时间显示（直播流不需要时间显示）
+            const time = root.querySelector('.xgplayer-time');
+            if (time) {
+              time.style.display = 'none';
+            }
+            
+            // 隐藏控制栏（如果配置了 controls: false）
+            const controls = root.querySelector('.xgplayer-controls');
+            if (controls && player.config && player.config.controls === false) {
+              controls.style.display = 'none';
+            }
+          }
+        });
+      }
+      
+      /**
+       * 捕获未处理的 Promise 错误
+       * 优化：静默处理，避免频繁日志输出影响性能
+       */
+      window.addEventListener('unhandledrejection', function(event) {
+        // 静默处理未捕获的 Promise 错误，避免频繁日志输出影响性能
+        // 不阻止，让错误正常传播
+      });
+      
+      /**
+       * 提供外部接口：更新流地址
+       * 用于动态切换直播流
+       */
+      window.switchStreamUrl = function(newUrl) {
+        if (player && typeof player.switchURL === 'function') {
+          player.switchURL(newUrl);
+          // 优化：切换流地址后，确保播放器开始播放（预加载模式可能暂停了）
+          setTimeout(function() {
+            if (player && player.video && player.video.paused) {
+              player.video.muted = true;
+              player.video.play().catch(function(e) {
+                // 静默处理
+              });
+            }
+          }, 500);
+        } else if (player && player.src !== undefined) {
+          player.src = newUrl;
+          // 优化：切换流地址后，确保播放器开始播放
+          setTimeout(function() {
+            if (player && player.video && player.video.paused) {
+              player.video.muted = true;
+              player.video.play().catch(function(e) {
+                // 静默处理
+              });
+            }
+          }, 500);
+        } else {
+          // 如果播放器还没初始化，更新 URL 参数后重新加载（移除 preload 参数，确保自动播放）
+          const newHtmlUrl = 'file:///android_asset/player.html?url=' + encodeURIComponent(newUrl);
+          window.location.href = newHtmlUrl;
+        }
+      };
+      
+      /**
+       * 页面加载完成后初始化播放器
+       * 确保所有资源都已加载
+       */
+      /**
+       * 页面加载完成后初始化播放器
+       * 确保所有资源都已加载
+       */
+      // 添加错误处理，避免脚本加载失败导致的问题
+      window.addEventListener('error', function(e) {
+        // 忽略跨域脚本错误（Script error），这些错误通常无法获取详细信息
+        if (e.message === 'Script error.' || e.message === 'Uncaught SyntaxError: Unexpected end of input') {
+          console.warn('检测到脚本加载错误（可能是跨域或网络问题）:', e.message);
+          // 检查是否是脚本加载失败
+          if (window.xgplayerLoadFailed || window.xgplayerShakaLoadFailed) {
+            console.error('外部脚本加载失败，播放器可能无法正常工作');
+          }
+          return;
+        }
+        console.error('页面加载错误:', e.message, e.filename, e.lineno);
+      }, true);
+      
+      if (document.readyState === 'complete') {
+        initPlayer();
+      } else {
+        window.addEventListener('load', initPlayer);
+      }
+    </script>
+  </body>
+</html>

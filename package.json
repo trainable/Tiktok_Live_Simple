@@ -1,0 +1,16 @@
+{
+  "name": "myapplication2",
+  "version": "1.0.0",
+  "description": "My Application with xgplayer",
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'Development server'"
+  },
+  "dependencies": {
+    "xgplayer": "^3.0.24-rc.5",
+    "xgplayer-dash": "^3.0.24-rc.5"
+  }
+}
+
+
+

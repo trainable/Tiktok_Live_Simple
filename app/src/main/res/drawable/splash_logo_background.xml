@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 白色长方形背景 - 缩小范围 -->
+    <item
+        android:left="30dp"
+        android:right="30dp"
+        android:top="30dp"
+        android:bottom="30dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/white" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <!-- TikTok图标 - 放大图标 -->
+    <item
+        android:drawable="@drawable/tiktok_logo"
+        android:width="140dp"
+        android:height="140dp"
+        android:gravity="center" />
+</layer-list>
+
