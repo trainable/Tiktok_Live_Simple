@@ -1,1 +1,1 @@
-# Tiktok_Simplae_Live
+# Tiktok_Simple_Live
